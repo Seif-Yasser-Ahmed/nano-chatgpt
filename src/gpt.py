@@ -32,3 +32,17 @@ class GPT(nn.Module):
         })
         # final classification head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+    def forward(self, idx):
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
+        pos = torch.arange(0, T, dtype=torch.long,
+                           device=idx.device).unsqueeze(0)  # (1, T)
+        pos_emb = self.transformer.wpe(pos)  # (1, T, n_embd)
+        tok_emb = self.transformer.wte(idx)  # (B, T, n_embd)
+        x = tok_emb + pos_emb  # (B, T, n_embd)
+        for block in self.transformer.h:
+            x = block(x)  # (B, T, n_embd)
+        x = self.transformer.ln_f(x)  # (B, T, n_embd)
+        logits = self.lm_head(x)  # (B, T, vocab_size)
+        return logits
