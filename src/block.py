@@ -1,0 +1,21 @@
+from dataclasses import dataclass
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
+import math
+
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = nn.LayerNorm(config.n_embd)
+        if config.use_checkpoint:
+            self.mlp = MLP(config)
+        else:
+            self.mlp = ModernMLP(config)
+
+    def forward(self, x):  # x-->layer norm->self-attn->residual connection->layer norm->MLP->residual connection
+        x += self.attn(self.ln_1(x))
+        x += self.mlp(self.ln_2(x))
+        return x
