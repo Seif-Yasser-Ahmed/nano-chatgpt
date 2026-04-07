@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 import math
 
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -16,8 +17,8 @@ class Block(nn.Module):
             self.mlp = ModernMLP(config)
 
     def forward(self, x):  # x-->layer norm->self-attn->residual connection->layer norm->MLP->residual connection
-        x += self.attn(self.ln_1(x))
-        x += self.mlp(self.ln_2(x))
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
         return x
 
 
@@ -39,20 +40,26 @@ class CausalSelfAttention(nn.Module):
         else:
             self.resid_dropout = nn.Identity()
         self.n_head = config.n_head
-        self.n_embed= config.n_embd
-        self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
+        self.n_embed = config.n_embd
+        self.register_buffer("bias", torch.tril(torch.ones(
+            config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
 
     def forward(self, x):
         B, T, C = x.size()  # batch size, sequence length, embedding dimension
         qkv = self.c_attn(x)  # (B, T, 3 * C)
-        q,k,v= qkv.split(self.n_embed, dim=2)  # (B, T, C) each
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        att = (q @ k.transpose(-2, -1)) * (1.0/math.sqrt(k.size(-1)))  # (B, nh, T, T)
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))  # (B, nh, T, T)
+        q, k, v = qkv.split(self.n_embed, dim=2)  # (B, T, C) each
+        q = q.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        att = (q @ k.transpose(-2, -1)) * \
+            (1.0/math.sqrt(k.size(-1)))  # (B, nh, T, T)
+        att = att.masked_fill(
+            self.bias[:, :, :T, :T] == 0, float('-inf'))  # (B, nh, T, T)
         att = F.softmax(att, dim=-1)  # (B, nh, T, T)
-        y= att @ v  # (B, nh, T, hs)
+        y = att @ v  # (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
         y = self.c_proj(y)  # (B, T, C)
         if not self.config.use_checkpoint:
@@ -77,7 +84,7 @@ class MLP(nn.Module):
         x = self.gelu(x)
         x = self.c_proj(x)
         if not self.config.use_checkpoint:
-             x = self.dropout(x)
+            x = self.dropout(x)
         return x
 
 
