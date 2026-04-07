@@ -6,7 +6,6 @@ from block import Block
 from gpt_config import GPTConfig
 
 
-
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -24,7 +23,7 @@ class GPT(nn.Module):
         # final classification head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx,targets=None):
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
         pos = torch.arange(0, T, dtype=torch.long,
@@ -36,7 +35,11 @@ class GPT(nn.Module):
             x = block(x)  # (B, T, n_embd)
         x = self.transformer.ln_f(x)  # (B, T, n_embd)
         logits = self.lm_head(x)  # (B, T, vocab_size)
-        return logits
+        loss=None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
+                                   targets.view(-1))
+        return logits,loss #expected loss at init is -ln(1/vocab_size)
 
     @classmethod
     def from_pretrained(cls, model_type):
