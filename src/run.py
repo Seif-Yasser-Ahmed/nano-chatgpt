@@ -3,7 +3,7 @@ from gpt_config import GPTConfig
 import tiktoken
 import torch
 from torch.nn import functional as F
-
+from data_loader import DataLoaderLite
 USE_PRETRAINED = False
 device = 'cpu'
 if torch.cuda.is_available():
@@ -13,24 +13,24 @@ elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
 
 print(f"Using device: {device}")
 
-enc = tiktoken.get_encoding('gpt2')
-with open('test_data/input.txt', 'r') as f:
-    text = f.read()
-text=text[:1000]
-tokens=enc.encode(text)
-B,T=4,32
-buffer=torch.tensor(tokens[:B*T+1], dtype=torch.long).to(device)
-x=buffer[:-1].view(B,T)
-y=buffer[1:].view(B,T)
+torch.manual_seed(1337)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(1337)
+
+
+train_loader=DataLoaderLite(B=4,T=32)
 model=GPT(GPTConfig())
 # model.eval()
 model.to(device)
-x=x.to(device)
-y=y.to(device)
+
 optimizer=torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    x,y=train_loader.next_batch()
+    x=x.to(device)
+    y=y.to(device)
     optimizer.zero_grad()
     logits,loss=model(x,y)
+    # import code; code.interact(local=locals())
     loss.backward()
     optimizer.step()
     print(f"Step {i}, Loss: {loss.item():.4f}")
@@ -39,6 +39,7 @@ for i in range(50):
 
 
 if USE_PRETRAINED:
+    enc=tiktoken.get_encoding('gpt2')
     num_return_sequences = 5
     max_length = 30
     # model = GPT.from_pretrained('gpt2')
