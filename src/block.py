@@ -32,6 +32,7 @@ class CausalSelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # linear layer to project the output of the attention mechanism back to the original embedding dimension
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT=1
         if not config.use_checkpoint:
             # dropout layer to prevent overfitting in the attention mechanism
             self.attn_dropout = nn.Dropout(config.dropout)
@@ -76,6 +77,7 @@ class MLP(nn.Module):
         self.gelu = nn.GELU(approximate='tanh')
 
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT=1
         self.dropout = nn.Dropout(config.dropout)
         self.config = config
 
