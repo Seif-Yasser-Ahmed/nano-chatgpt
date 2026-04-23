@@ -14,6 +14,7 @@ class Block(nn.Module):
         # self.attn = CausalSelfAttention(config)
         self.attn = FlashAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
+        # self.mlp = MLP(config)
         if config.use_checkpoint:
             self.mlp = MLP(config)
         else:
