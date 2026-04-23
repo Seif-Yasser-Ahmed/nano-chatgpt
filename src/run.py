@@ -21,7 +21,17 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
-train_loader = DataLoaderLite(B=4, T=512)
+
+total_batch_size=524288
+B=2
+T=1024
+assert total_batch_size % (B*T) == 0, "total_batch_size must be divisible by B*T"
+grad_accum_steps = total_batch_size // (B*T)
+print(f"total desired batch size: {total_batch_size}")
+print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
+
+
+train_loader = DataLoaderLite(B=B, T=T)
 torch.set_float32_matmul_precision('high')
 model = GPT(GPTConfig(vocab_size=50304))
 # model.eval()
@@ -53,17 +63,21 @@ print(f"Training for 1 epoch ({num_steps} steps)")
 
 for step in range(max_steps):
     t0 = time.time()
-    x, y = train_loader.next_batch()
-    x = x.to(device)
-    y = y.to(device)
     optimizer.zero_grad()
+    loss_accum=0.0
+    for micro_step in range(grad_accum_steps):
+        x, y = train_loader.next_batch()
+        x = x.to(device)
+        y = y.to(device)
     # mixed precision training for faster computation and reduced memory usage
     # logits are 16bfloat and loss is float32
-    with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
-        logits, loss = model(x, y)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
+            logits, loss = model(x, y)
         # import code; code.interact(local=locals())
-    loss = loss.mean()
-    loss.backward()
+        loss = loss.mean()
+        loss = loss / grad_accum_steps
+        loss_accum+=loss.detach()
+        loss.backward()
     norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     lr=get_lr(step)
     for param_group in optimizer.param_groups:
@@ -73,9 +87,10 @@ for step in range(max_steps):
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     t1 = time.time()
     dt = (t1-t0)*1000
-    tokens_per_second = (train_loader.B*train_loader.T)/dt*1000
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps
+    tokens_per_second = tokens_processed / (t1-t0)
     print(
-        f"Step {step} | Loss: {loss.item():.4f} | lr={lr:.6} | norm {norm:.4f} | Time: {dt:.2f} ms | Tokens/s: {tokens_per_second:.2f}")
+        f"step {step} | loss: {loss_accum.item():.4f} | lr={lr:.6} | norm {norm:.4f} | time: {dt:.2f} ms | tok/s: {tokens_per_second:.2f}")
 # print(logits.shape)
 
 
