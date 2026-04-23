@@ -20,34 +20,42 @@ torch.manual_seed(1337)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
-train_loader=DataLoaderLite(B=2, T=512)
-# torch.set_float32_matmul_precision('high')
-model=GPT(GPTConfig())
+train_loader = DataLoaderLite(B=2, T=512)
+torch.set_float32_matmul_precision('high')
+model = GPT(GPTConfig())
 # model.eval()
+if torch.cuda.device_count() > 1:
+    print(f"Let's use {torch.cuda.device_count()} GPUs!")
+    model = torch.nn.DataParallel(model)
 model.to(device)
-
-optimizer=torch.optim.AdamW(model.parameters(), lr=3e-4)
+# model = torch.compile(model) if hasattr(torch, 'compile') else model
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 
 num_steps = len(train_loader.tokens) // (train_loader.B * train_loader.T)
 print(f"Training for 1 epoch ({num_steps} steps)")
 
 
-for i in range(51):
-    t0=time.time()
-    x,y=train_loader.next_batch()
-    x=x.to(device)
-    y=y.to(device)
+for i in range(50):
+    t0 = time.time()
+    x, y = train_loader.next_batch()
+    x = x.to(device)
+    y = y.to(device)
     optimizer.zero_grad()
-    logits, loss=model(x, y)
-    # import code; code.interact(local=locals())
+    # mixed precision training for faster computation and reduced memory usage
+    # logits are 16bfloat and loss is float32
+    with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
+        logits, loss = model(x, y)
+        # import code; code.interact(local=locals())
+    loss = loss.mean()
     loss.backward()
     # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
     optimizer.step()
     torch.cuda.synchronize() if torch.cuda.is_available() else None
-    t1=time.time()
-    dt=(t1-t0)*1000
-    tokens_per_second=(train_loader.B*train_loader.T)/dt*1000
-    print(f"Step {i}, Loss: {loss.item():.4f}, Time: {dt:.2f} ms, Tokens/s: {tokens_per_second:.2f}")
+    t1 = time.time()
+    dt = (t1-t0)*1000
+    tokens_per_second = (train_loader.B*train_loader.T)/dt*1000
+    print(
+        f"Step {i}, Loss: {loss.item():.4f}, Time: {dt:.2f} ms, Tokens/s: {tokens_per_second:.2f}")
 # print(logits.shape)
 
 
