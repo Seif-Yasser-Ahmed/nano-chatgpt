@@ -68,6 +68,48 @@ class CausalSelfAttention(nn.Module):
         return y
     # pass
 
+class FlashAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0, "Embedding dimension must be divisible by number of heads"
+        self.n_head = config.n_head
+        self.config = config
+        # linear layer to compute query, key, value
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+        # linear layer to project the output of the attention mechanism back to the original embedding dimension
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj.NANOGPT_SCALE_INIT=1
+        if not config.use_checkpoint:
+            # dropout layer to prevent overfitting in the attention mechanism
+            self.attn_dropout = nn.Dropout(config.dropout)
+            # dropout layer to prevent overfitting in the residual connection
+            self.resid_dropout = nn.Dropout(config.dropout)
+        else:
+            self.resid_dropout = nn.Identity()
+        self.n_head = config.n_head
+        self.n_embed = config.n_embd
+        self.register_buffer("bias", torch.tril(torch.ones(
+            config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
+
+    def forward(self, x):
+        B, T, C = x.size()  # batch size, sequence length, embedding dimension
+        qkv = self.c_attn(x)  # (B, T, 3 * C)
+        q, k, v = qkv.split(self.n_embed, dim=2)  # (B, T, C) each
+        q = q.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C //
+                   self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        y=F.scaled_dot_product_attention(q,k,v,is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
+        y = self.c_proj(y)  # (B, T, C)
+        if not self.config.use_checkpoint:
+            y = self.resid_dropout(y)
+        return y
+    # pass
+
+
 
 class MLP(nn.Module):
     def __init__(self, config):
