@@ -146,27 +146,25 @@ class GPT(nn.Module):
         """
         self.eval() # Ensure the model is in evaluation mode
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             
-            # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
             
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
+            logits = logits[:, -1, :]
             
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
+            if temperature == 0.0:
+                _, idx_next = torch.topk(logits, k=1, dim=-1)
+            else:
+                logits = logits / temperature
                 
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-            
-            # append sampled index to the running sequence and continue
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = -float('Inf')
+                    
+                probs = F.softmax(logits, dim=-1)
+                
+                # sample from the distribution
+                idx_next = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
