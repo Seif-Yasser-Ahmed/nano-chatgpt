@@ -4,3 +4,4 @@ tiktoken
 inspect
 dataclasses
 transformers
+datasets
