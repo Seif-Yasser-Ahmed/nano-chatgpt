@@ -137,3 +137,32 @@ class GPT(nn.Module):
         print(f"Fused AdamW available: {fused_available}, using fused AdamW: {use_fused}")
         optimizer=torch.optim.AdamW(optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
         return optimizer
+    
+
+
+    @classmethod
+    def load_custom_checkpoint(cls, checkpoint_path, device='cpu'):
+        """
+        Loads a custom trained model from a saved .pt checkpoint.
+        """
+        print(f"Loading checkpoint from {checkpoint_path} to {device}...")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        
+        # Initialize with the exact same config used in run.py
+        config = GPTConfig(vocab_size=50304)
+        model = cls(config)
+        
+        state_dict = checkpoint['model']
+        
+        # If the model was trained with torch.compile(), PyTorch adds an '_orig_mod.' prefix.
+        # We strip it out here so the dictionary keys match the base model exactly.
+        unwanted_prefix = '_orig_mod.'
+        for k, v in list(state_dict.items()):
+            if k.startswith(unwanted_prefix):
+                state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
+                
+        model.load_state_dict(state_dict)
+        model.to(device)
+        model.eval() # Hardcode eval mode since this is for generation
+        
+        return model
