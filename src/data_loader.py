@@ -1,25 +1,34 @@
 import os
 import torch
 import numpy as np
+import tiktoken
 
 class DataLoaderLite:
-    def __init__(self, B, T, process_rank=0, num_processes=1, split='train'):
+    def __init__(self, B, T, process_rank=0, num_processes=1, split='train', data_path=None):
         self.B = B
         self.T = T
         self.process_rank = process_rank
         self.num_processes = num_processes
         
-        # Ensure we are only asking for train or val
-        assert split in {'train', 'val'}
-
-        # Map the split directly to the files you generated earlier
-        data_path = f'{split}.bin'
-        
-        if process_rank == 0:
-            print(f"Loading {split} split via memmap from: {data_path}")
+        # 1. LOCAL TESTING MODE (loads .txt file completely into RAM)
+        if data_path is not None and data_path.endswith('.txt'):
+            if process_rank == 0:
+                print(f"Loading raw text file for local testing: {data_path}")
+            with open(data_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            enc = tiktoken.get_encoding('gpt2')
+            tokens = enc.encode(text)
+            self.tokens = torch.tensor(tokens, dtype=torch.long)
             
-        # We use memmap here instead of loading everything into RAM
-        self.tokens = np.memmap(data_path, dtype=np.uint16, mode='r')
+        # 2. FULL TRAINING MODE (streams .bin files from disk)
+        else:
+            assert split in {'train', 'val'}, f"Split must be 'train' or 'val', got {split}"
+            bin_path = f'{split}.bin'
+            
+            if process_rank == 0:
+                print(f"Loading {split} split via memmap from: {bin_path}")
+                
+            self.tokens = np.memmap(bin_path, dtype=np.uint16, mode='r')
 
         if process_rank == 0:
             print(f"Dataset length in tokens: {len(self.tokens):,}")
@@ -30,11 +39,13 @@ class DataLoaderLite:
     def next_batch(self):
         B, T = self.B, self.T
         
-        # Grab the buffer slice (instantaneous with memmap)
+        # Grab the buffer slice 
         buf = self.tokens[self.current_index : self.current_index + B * T + 1]
         
-        # Convert uint16 numpy array to int64, then wrap in a torch.long tensor
-        buf = torch.tensor(buf.astype(np.int64), dtype=torch.long)
+        # If the data came from a .bin memmap, convert the numpy array to a torch tensor
+        if isinstance(buf, np.ndarray):
+            buf = torch.tensor(buf.astype(np.int64), dtype=torch.long)
+        # If it came from a .txt file, it is already a torch tensor, so we do nothing
             
         x = buf[:-1].view(B, T)
         y = buf[1:].view(B, T)

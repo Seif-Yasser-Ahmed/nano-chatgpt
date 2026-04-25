@@ -49,19 +49,20 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
 
-total_batch_size=524288
-B=2
-T=1024
+out_dir = 'out-gpt2'
+if master_process:
+    os.makedirs(out_dir, exist_ok=True)
+
+# 2. Fix the max_steps bug
+total_batch_size = 524288
+B = 2
+T = 1024
 assert total_batch_size % (B*T*ddp_world_size) == 0, "total_batch_size must be divisible by B*T*ddp_world_size"
 grad_accum_steps = total_batch_size // (B*T*ddp_world_size)
-if master_process:
-    print(f"total desired batch size: {total_batch_size}")
-    print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
+train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, data_path='test_data/input.txt')
 
-train_loader = DataLoaderLite(B=B, T=T,process_rank=ddp_rank, num_processes=ddp_world_size)
-
-
+val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, data_path='test_data/input.txt') # Or a separate val.txt
 torch.set_float32_matmul_precision('high')
 
 
@@ -82,8 +83,9 @@ raw_model = model.module if ddp else model
 
 max_lr=6e-4
 min_lr=max_lr*0.1
-warmup_steps=10
-max_steps=50
+warmup_steps=71
+max_steps=1907
+
 def get_lr(it):
     if it<warmup_steps:
         return max_lr*(it+1)/warmup_steps
@@ -97,26 +99,60 @@ def get_lr(it):
 # optimizer = torch.optim.AdamW(model.parameters(), lr=6e-4,betas=(0.9,0.95),eps=1e-8)
 optimizer=raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
 num_steps = len(train_loader.tokens) // (train_loader.B * train_loader.T)
-print(f"Training for 1 epoch ({num_steps} steps)")
+if master_process:
+    print(f"Training for 1 epoch ({num_steps} steps)")
 
+# 4. Define evaluation intervals
+eval_interval = 250
+eval_iters = 20 # Number of batches to average for validation loss
 
 for step in range(max_steps):
+    
+    # --- EVALUATION & CHECKPOINTING PHASE ---
+    if step % eval_interval == 0 or step == max_steps - 1:
+        model.eval()
+        val_loss_accum = 0.0
+        with torch.no_grad():
+            for _ in range(eval_iters):
+                x_val, y_val = val_loader.next_batch()
+                x_val, y_val = x_val.to(device), y_val.to(device)
+                with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
+                    logits, loss = model(x_val, y_val)
+                val_loss_accum += loss.detach()
+        
+        val_loss_accum = val_loss_accum / eval_iters
+        if ddp:
+            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
+            
+        if master_process:
+            print(f"step {step} | val loss: {val_loss_accum.item():.4f}")
+            # Save the checkpoint
+            checkpoint = {
+                'model': raw_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'step': step,
+                'val_loss': val_loss_accum.item(),
+            }
+            checkpoint_name = f'ckpt_{step:05d}.pt'
+            torch.save(checkpoint, os.path.join(out_dir, checkpoint_name))
+            print(f"saved checkpoint to {out_dir}/{checkpoint_name}")
+            
+        model.train()
+    # -----------------------------------------
+
     t0 = time.time()
     optimizer.zero_grad()
-    loss_accum=0.0
+    loss_accum = 0.0
     
     for micro_step in range(grad_accum_steps):
         x, y = train_loader.next_batch()
-        x = x.to(device)
-        y = y.to(device)
-    # mixed precision training for faster computation and reduced memory usage
-    # logits are 16bfloat and loss is float32
+        x, y = x.to(device), y.to(device)
+        
         with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
             logits, loss = model(x, y)
-        # import code; code.interact(local=locals())
-        # loss = loss.mean()
+        
         loss = loss / grad_accum_steps
-        loss_accum+=loss.detach()
+        loss_accum += loss.detach()
         
         if ddp:
             model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
@@ -125,25 +161,24 @@ for step in range(max_steps):
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
     
-    norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    lr=get_lr(step)
+    norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    lr = get_lr(step)
     
     for param_group in optimizer.param_groups:
-        param_group['lr']=lr
+        param_group['lr'] = lr
 
     optimizer.step()
-    torch.cuda.synchronize() if torch.cuda.is_available() else None
+    if torch.cuda.is_available():
+        torch.cuda.synchronize() 
     
     t1 = time.time()
-    dt = (t1-t0)
+    dt = (t1 - t0)
     
-    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps*ddp_world_size
+    tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tokens_per_second = tokens_processed / dt
     
     if master_process:
-        print(
-        f"step {step} | loss: {loss_accum.item():.4f} | lr={lr:.6} | norm {norm:.4f} | time: {dt*1000:.2f} ms | tok/s: {tokens_per_second:.2f}")
-# print(logits.shape)
+        print(f"step {step} | loss: {loss_accum.item():.4f} | lr={lr:.6f} | norm {norm:.4f} | time: {dt*1000:.2f} ms | tok/s: {tokens_per_second:.2f}")
 
 if ddp:
     destroy_process_group()
