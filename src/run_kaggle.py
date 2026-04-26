@@ -223,8 +223,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_lr", type=float, default=6e-4)
     parser.add_argument("--min_lr", type=float, default=None)
     parser.add_argument("--min_lr_factor", type=float, default=0.1)
-    parser.add_argument("--warmup_steps", type=int, default=71)
-    parser.add_argument("--max_steps", type=int, default=1907)
+    parser.add_argument("--warmup_steps", type=int, default=715)
+    parser.add_argument("--max_steps", type=int, default=19073)
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--eval_iters", type=int, default=20)
     
