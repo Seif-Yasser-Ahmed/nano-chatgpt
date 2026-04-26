@@ -10,7 +10,6 @@ class DataLoaderLite:
         self.process_rank = process_rank
         self.num_processes = num_processes
         
-        # 1. LOCAL TESTING MODE (loads .txt file completely into RAM)
         if data_path is not None and data_path.endswith('.txt'):
             if process_rank == 0:
                 print(f"Loading raw text file for local testing: {data_path}")
@@ -20,7 +19,6 @@ class DataLoaderLite:
             tokens = enc.encode(text)
             self.tokens = torch.tensor(tokens, dtype=torch.long)
             
-        # 2. FULL TRAINING MODE (streams .bin files from disk)
         else:
             assert split in {'train', 'val'}, f"Split must be 'train' or 'val', got {split}"
             bin_path = f'data/{split}.bin'
@@ -39,10 +37,8 @@ class DataLoaderLite:
     def next_batch(self):
         B, T = self.B, self.T
         
-        # Grab the buffer slice 
         buf = self.tokens[self.current_index : self.current_index + B * T + 1]
         
-        # If the data came from a .bin memmap, convert the numpy array to a torch tensor
         if isinstance(buf, np.ndarray):
             buf = torch.tensor(buf.astype(np.int64), dtype=torch.long)
         # If it came from a .txt file, it is already a torch tensor, so we do nothing

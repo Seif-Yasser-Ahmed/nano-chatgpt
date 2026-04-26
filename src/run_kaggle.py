@@ -12,11 +12,9 @@ import os
 import torch.distributed as dist
 import argparse
 
-def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=16, T=1024, max_lr=6e-4, min_lr=None, min_lr_factor=0.1, warmup_steps=715, max_steps=19073, eval_interval=100, eval_iters=20, resume_ckpt=None):
-    USE_PRETRAINED = False
+def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1024, max_lr=6e-4, min_lr=None, min_lr_factor=0.1, warmup_steps=715, max_steps=19073, eval_interval=100, eval_iters=20, resume_ckpt=None):
     enc = tiktoken.get_encoding('gpt2')
     
-    # various inits, derived attributes, I/O setup
     ddp = int(os.environ.get('RANK', -1)) != -1 
     if ddp:
         init_process_group(backend='nccl')
@@ -76,24 +74,18 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=16, T=1
         return min_lr + (max_lr - min_lr) * coeff
 
     optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
-    
-    # -------------------------------------------------------------------------
-    # CHECKPOINT RESUMPTION LOGIC
-    # -------------------------------------------------------------------------
+
     start_step = 0
     if resume_ckpt and os.path.isfile(resume_ckpt):
         if master_process:
             print(f"Loading checkpoint from {resume_ckpt}...")
             
-        # map_location ensures we don't accidentally load everything onto GPU 0 in a DDP run
         checkpoint = torch.load(resume_ckpt, map_location=device)
         raw_model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         
-        # The checkpoint was saved AT this step, so we begin at step + 1
         start_step = checkpoint['step'] + 1
         
-        # Fast-forward the DataLoader to exactly where it left off
         batches_to_skip = start_step * grad_accum_steps
         if master_process:
             print(f"Fast-forwarding data loader by {batches_to_skip} micro-batches. This may take a few seconds...")
@@ -103,7 +95,6 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=16, T=1
             
         if master_process:
             print(f"Resumed successfully! Continuing from step {start_step}.")
-    # -------------------------------------------------------------------------
 
     num_steps = len(train_loader.tokens) // (train_loader.B * train_loader.T)
     if master_process and start_step == 0:
@@ -218,7 +209,7 @@ if __name__ == "__main__":
     parser.add_argument("--manual_seed", type=int, default=1337)
     parser.add_argument("--out_dir", type=str, default="out_gpt2")
     parser.add_argument("--total_batch_size", type=int, default=524288)
-    parser.add_argument("--B", type=int, default=16)
+    parser.add_argument("--B", type=int, default=64)
     parser.add_argument("--T", type=int, default=1024)
     parser.add_argument("--max_lr", type=float, default=6e-4)
     parser.add_argument("--min_lr", type=float, default=None)
@@ -228,7 +219,6 @@ if __name__ == "__main__":
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--eval_iters", type=int, default=20)
     
-    # NEW ARGUMENT FOR RESUMING
     parser.add_argument("--resume_ckpt", type=str, default=None, help="Path to checkpoint .pt file to resume from")
 
     args = parser.parse_args()
@@ -246,5 +236,5 @@ if __name__ == "__main__":
         max_steps=args.max_steps,
         eval_interval=args.eval_interval,
         eval_iters=args.eval_iters,
-        resume_ckpt=args.resume_ckpt # Pass it to the function
+        resume_ckpt=args.resume_ckpt
     )
