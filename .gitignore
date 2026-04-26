@@ -210,3 +210,4 @@ __marimo__/
 notebooks/
 test_data/
 out_gpt2/*.pt
+*.bin

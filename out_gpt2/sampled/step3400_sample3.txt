@@ -1,0 +1,2 @@
+Hello, Iam a language model, and can add and remove the words for a student to a question.
+The basic syntax of a statement is the set
