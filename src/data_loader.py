@@ -23,7 +23,7 @@ class DataLoaderLite:
         # 2. FULL TRAINING MODE (streams .bin files from disk)
         else:
             assert split in {'train', 'val'}, f"Split must be 'train' or 'val', got {split}"
-            bin_path = f'{split}.bin'
+            bin_path = f'data/{split}.bin'
             
             if process_rank == 0:
                 print(f"Loading {split} split via memmap from: {bin_path}")
