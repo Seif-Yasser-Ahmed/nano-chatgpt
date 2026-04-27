@@ -1,0 +1,14 @@
+{
+    "openai_gpt2_baseline": {
+        "accuracy": 0.2891854212308305,
+        "normalized_accuracy": 0.31139215295757816
+    },
+    "custom_model": {
+        "accuracy": 0.2893845847440749,
+        "normalized_accuracy": 0.31228838876717785
+    },
+    "deltas": {
+        "accuracy_diff": 0.00019916351324439363,
+        "normalized_accuracy_diff": 0.0008962358095996881
+    }
+}
