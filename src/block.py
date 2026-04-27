@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import math
-from attention import CausalSelfAttention, FlashAttention
-from mlp import MLP, ModernMLP
+from src.attention import CausalSelfAttention, FlashAttention
+from src.mlp import MLP, ModernMLP
 
 
 class Block(nn.Module):

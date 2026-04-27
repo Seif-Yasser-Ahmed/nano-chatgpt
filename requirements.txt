@@ -3,3 +3,4 @@ tiktoken
 transformers
 datasets
 tqdm
+lm-eval
