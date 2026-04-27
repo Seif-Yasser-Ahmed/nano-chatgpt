@@ -2,8 +2,8 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from block import Block
-from gpt_config import GPTConfig
+from src.block import Block
+from src.gpt_config import GPTConfig
 import inspect
 
 class GPT(nn.Module):
