@@ -195,3 +195,37 @@ class GPT(nn.Module):
         model.eval() # Hardcode eval mode since this is for generation
         
         return model
+    
+    
+    def create_chat_completions(self, prompts, max_new_tokens=50, temperature=1.0, top_k=None):
+        """
+        Takes a string or list of strings, encodes them, generates completions, 
+        and returns the decoded full strings.
+        """
+        import tiktoken
+        enc = tiktoken.get_encoding('gpt2')
+        device = next(self.parameters()).device
+        
+        is_single = isinstance(prompts, str)
+        if is_single:
+            prompts = [prompts]
+            
+        results = []
+        for prompt in prompts:
+            # 1. Encode prompt
+            tokens = enc.encode(prompt)
+            idx = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0) # (1, T)
+            
+            # 2. Generate
+            generated_idx = self.generate(
+                idx, 
+                max_new_tokens=max_new_tokens, 
+                temperature=temperature, 
+                top_k=top_k
+            )
+            
+            # 3. Decode back to string
+            generated_text = enc.decode(generated_idx[0].tolist())
+            results.append(generated_text)
+            
+        return results[0] if is_single else results
