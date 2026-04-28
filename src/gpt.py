@@ -37,23 +37,33 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
 
-    def forward(self, idx,targets=None):
+    def forward(self, idx,targets=None,use_cache=False,kv_cache=None):
         B, T = idx.size()
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
-        pos = torch.arange(0, T, dtype=torch.long,
+        past_length=kv_cache[0][0].size(-2) if kv_cache is not None else 0
+        assert past_length+T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
+        pos = torch.arange(past_length, past_length+T, dtype=torch.long,
                            device=idx.device).unsqueeze(0)  # (1, T)
+        
         pos_emb = self.transformer.wpe(pos)  # (1, T, n_embd)
         tok_emb = self.transformer.wte(idx)  # (B, T, n_embd)
         x = tok_emb + pos_emb  # (B, T, n_embd)
-        for block in self.transformer.h:
-            x = block(x)  # (B, T, n_embd)
+        new_kv_cache=[]
+        for i,block in enumerate(self.transformer.h):
+            block_kv_cache = kv_cache[i] if kv_cache is not None else None
+            
+            x, block_kv = block(x, kv_cache=block_kv_cache)
+            new_kv_cache.append(block_kv)
+
         x = self.transformer.ln_f(x)  # (B, T, n_embd)
         logits = self.lm_head(x)  # (B, T, vocab_size)
         loss=None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
                                    targets.view(-1))
-        return logits,loss #expected loss at init is -ln(1/vocab_size)
+        if use_cache:
+            return logits,loss,tuple(new_kv_cache)
+        else:
+            return logits,loss  #expected loss at init is -ln(1/vocab_size)
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -145,10 +155,26 @@ class GPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         """
         self.eval() # Ensure the model is in evaluation mode
+        kv_cache = None
+        
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # --> SAFETY CHECK: Prevent Positional Embedding IndexError <--
+            # If our total sequence length hits the model's max block size, we must stop 
+            # generating because the KV Cache cannot exceed the max positional embeddings.
+            if idx.size(1) >= self.config.block_size:
+                print(f"\n[Warning] Reached max context window ({self.config.block_size}). Stopping generation early.")
+                break
+                
+            if kv_cache is None: 
+                # prefill mode: we don't need the cropping logic here anymore because 
+                idx_cond = idx 
+            else: 
+                # decode mode: only feed in the most recent token
+                idx_cond = idx[:, -1:]            
             
-            logits, _ = self(idx_cond)
+            # Note: Ensure your forward() is defined as: 
+            # def forward(self, idx, targets=None, use_cache=False, kv_cache=None):
+            logits, _, kv_cache = self(idx_cond, use_cache=True, kv_cache=kv_cache)
             
             logits = logits[:, -1, :]
             
@@ -165,6 +191,7 @@ class GPT(nn.Module):
                 
                 # sample from the distribution
                 idx_next = torch.multinomial(probs, num_samples=1)
+                
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
