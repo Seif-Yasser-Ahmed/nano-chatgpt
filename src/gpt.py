@@ -37,23 +37,30 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
 
-    def forward(self, idx,targets=None):
+    def forward(self, idx,targets=None,kv_cache=None):
         B, T = idx.size()
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
-        pos = torch.arange(0, T, dtype=torch.long,
+        past_length=kv_cache[0][0].size(-2) if kv_cache is not None else 0
+        assert past_length+T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
+        pos = torch.arange(0, past_length+T, dtype=torch.long,
                            device=idx.device).unsqueeze(0)  # (1, T)
+        
         pos_emb = self.transformer.wpe(pos)  # (1, T, n_embd)
         tok_emb = self.transformer.wte(idx)  # (B, T, n_embd)
         x = tok_emb + pos_emb  # (B, T, n_embd)
-        for block in self.transformer.h:
-            x = block(x)  # (B, T, n_embd)
+        new_kv_cache=[]
+        for i,block in enumerate(self.transformer.h):
+            block_kv_cache = kv_cache[i] if kv_cache is not None else None
+            
+            x, block_kv = block(x, kv_cache=block_kv_cache)
+            new_kv_cache.append(block_kv)
+
         x = self.transformer.ln_f(x)  # (B, T, n_embd)
         logits = self.lm_head(x)  # (B, T, vocab_size)
         loss=None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
                                    targets.view(-1))
-        return logits,loss #expected loss at init is -ln(1/vocab_size)
+        return logits,loss,tuple(new_kv_cache) #expected loss at init is -ln(1/vocab_size)
 
     @classmethod
     def from_pretrained(cls, model_type):
