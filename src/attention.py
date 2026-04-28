@@ -71,7 +71,7 @@ class FlashAttention(nn.Module):
         self.register_buffer("bias", torch.tril(torch.ones(
             config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x,kv_cache=None):
         B, T, C = x.size()  # batch size, sequence length, embedding dimension
         qkv = self.c_attn(x)  # (B, T, 3 * C)
         q, k, v = qkv.split(self.n_embed, dim=2)  # (B, T, C) each
@@ -81,10 +81,17 @@ class FlashAttention(nn.Module):
                    self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C //
                    self.n_head).transpose(1, 2)  # (B, nh, T, hs)
-        y=F.scaled_dot_product_attention(q,k,v,is_causal=True)
+        
+        if kv_cache is not None:
+            k_cache, v_cache = kv_cache
+            k = torch.cat([k_cache, k], dim=-2)
+            v = torch.cat([v_cache, v], dim=-2)
+        
+        current_kv_cache = (k, v)
+        y=F.scaled_dot_product_attention(q,k,v,is_causal=(kv_cache is None))
         y = y.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
         y = self.c_proj(y)  # (B, T, C)
         if not self.config.use_checkpoint:
             y = self.resid_dropout(y)
-        return y
+        return y,current_kv_cache
     # pass
