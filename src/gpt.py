@@ -152,10 +152,13 @@ class GPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         """
         self.eval() # Ensure the model is in evaluation mode
+        kv_cache=None
         for _ in range(max_new_tokens):
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            
-            logits, _ = self(idx_cond)
+            if kv_cache is None:
+                idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            else:
+                idx_cond = idx[:, -1:]  # only feed in the most recent token for efficiency when using kv_cache            
+            logits, _ = self(idx_cond,kv_cache=kv_cache)
             
             logits = logits[:, -1, :]
             
