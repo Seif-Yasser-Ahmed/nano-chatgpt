@@ -37,7 +37,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=std)
 
-    def forward(self, idx,targets=None,kv_cache=None):
+    def forward(self, idx,targets=None,use_cache=False,kv_cache=None):
         B, T = idx.size()
         past_length=kv_cache[0][0].size(-2) if kv_cache is not None else 0
         assert past_length+T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
@@ -60,7 +60,10 @@ class GPT(nn.Module):
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
                                    targets.view(-1))
-        return logits,loss,tuple(new_kv_cache) #expected loss at init is -ln(1/vocab_size)
+        if use_cache:
+            return logits,loss,tuple(new_kv_cache)
+        else:
+            return logits,loss  #expected loss at init is -ln(1/vocab_size)
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -158,7 +161,7 @@ class GPT(nn.Module):
                 idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             else:
                 idx_cond = idx[:, -1:]  # only feed in the most recent token for efficiency when using kv_cache            
-            logits, _ = self(idx_cond,kv_cache=kv_cache)
+            logits, _,past_kv = self(idx_cond,use_cache=True,kv_cache=kv_cache)
             
             logits = logits[:, -1, :]
             
