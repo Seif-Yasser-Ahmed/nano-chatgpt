@@ -41,7 +41,7 @@ class GPT(nn.Module):
         B, T = idx.size()
         past_length=kv_cache[0][0].size(-2) if kv_cache is not None else 0
         assert past_length+T <= self.config.block_size, f"Cannot forward sequence of length {T},model block size is only {self.config.block_size}"
-        pos = torch.arange(0, past_length+T, dtype=torch.long,
+        pos = torch.arange(past_length, past_length+T, dtype=torch.long,
                            device=idx.device).unsqueeze(0)  # (1, T)
         
         pos_emb = self.transformer.wpe(pos)  # (1, T, n_embd)
@@ -155,13 +155,26 @@ class GPT(nn.Module):
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         """
         self.eval() # Ensure the model is in evaluation mode
-        kv_cache=None
+        kv_cache = None
+        
         for _ in range(max_new_tokens):
-            if kv_cache is None:
-                idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            else:
-                idx_cond = idx[:, -1:]  # only feed in the most recent token for efficiency when using kv_cache            
-            logits, _,past_kv = self(idx_cond,use_cache=True,kv_cache=kv_cache)
+            # --> SAFETY CHECK: Prevent Positional Embedding IndexError <--
+            # If our total sequence length hits the model's max block size, we must stop 
+            # generating because the KV Cache cannot exceed the max positional embeddings.
+            if idx.size(1) >= self.config.block_size:
+                print(f"\n[Warning] Reached max context window ({self.config.block_size}). Stopping generation early.")
+                break
+                
+            if kv_cache is None: 
+                # prefill mode: we don't need the cropping logic here anymore because 
+                idx_cond = idx 
+            else: 
+                # decode mode: only feed in the most recent token
+                idx_cond = idx[:, -1:]            
+            
+            # Note: Ensure your forward() is defined as: 
+            # def forward(self, idx, targets=None, use_cache=False, kv_cache=None):
+            logits, _, kv_cache = self(idx_cond, use_cache=True, kv_cache=kv_cache)
             
             logits = logits[:, -1, :]
             
@@ -178,6 +191,7 @@ class GPT(nn.Module):
                 
                 # sample from the distribution
                 idx_next = torch.multinomial(probs, num_samples=1)
+                
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
