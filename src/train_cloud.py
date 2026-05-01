@@ -62,10 +62,14 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
 
     model = GPT(GPTConfig(vocab_size=50304))
     model.to(device)
-
+    uncompiled_model = model
+    if 'cuda' in device:
+        if master_process:
+            print("Compiling the model... (this will take a minute or two)")
+        model = torch.compile(model)
     if ddp:
         model = DDP(model, device_ids=[ddp_local_rank])
-    raw_model = model.module if ddp else model
+    # raw_model = model.module if ddp else model
 
     min_lr = max_lr * min_lr_factor if min_lr is None else min_lr
 
@@ -79,7 +83,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
         coeff = 0.5 * (1 + math.cos(math.pi * decay_ratio))
         return min_lr + (max_lr - min_lr) * coeff
 
-    optimizer = raw_model.configure_optimizers(
+    optimizer = uncompiled_model.configure_optimizers(
         weight_decay=0.1, learning_rate=6e-4, device=device)
 
     start_step = 0
@@ -88,7 +92,8 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
             print(f"Loading checkpoint from {resume_ckpt}...")
 
         checkpoint = torch.load(resume_ckpt, map_location=device)
-        raw_model.load_state_dict(checkpoint['model'])
+        # raw_model.load_state_dict(checkpoint['model'])
+        uncompiled_model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
 
         start_step = checkpoint['step'] + 1
@@ -136,7 +141,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                 print(f"step {step} | val loss: {val_loss_accum.item():.4f}")
                 current_val_loss = val_loss_accum.item()
                 checkpoint = {
-                    'model': raw_model.state_dict(),
+                    'model': uncompiled_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'step': step,
                     'val_loss': val_loss_accum.item(),
@@ -158,7 +163,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                             print(
                                 f"Deleting old checkpoint from Google Drive: {old_ckpt}...")
                             subprocess.run([
-                                "python", "drive/drive.py",
+                                "python", "src/drive/drive.py",
                                 "--action", "delete",
                                 "--ckpt_path", old_ckpt,
                                 "--custom_drive_path", "GPT2_Checkpoints"
@@ -171,7 +176,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                     # 2. Upload the brand new checkpoint to Google Drive
                     print(f"Uploading {checkpoint_name} to Google Drive...")
                     subprocess.run([
-                        "python", "drive/drive.py",
+                        "python", "src/drive/drive.py",
                         "--action", "upload",
                         "--ckpt_path", ckpt_path,
                         "--custom_drive_path", "GPT2_Checkpoints"
@@ -190,7 +195,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
             sample_rng.manual_seed(42 + ddp_rank)
             while xgen.size(1) < max_length:
                 with torch.no_grad():
-                    logits, loss = model(xgen)
+                    logits, loss = uncompiled_model(xgen)
                     logits = logits[:, -1, :]
                     probs = F.softmax(logits, dim=-1)
                     topk_props, topk_indices = torch.topk(probs, 50, dim=-1)
