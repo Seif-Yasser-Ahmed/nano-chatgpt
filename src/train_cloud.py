@@ -14,10 +14,11 @@ import argparse
 import logging
 import json
 
+
 def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1024, max_lr=6e-4, min_lr=None, min_lr_factor=0.1, warmup_steps=715, max_steps=19073, eval_interval=100, eval_iters=20, resume_ckpt=None):
     enc = tiktoken.get_encoding('gpt2')
-    
-    ddp = int(os.environ.get('RANK', -1)) != -1 
+
+    ddp = int(os.environ.get('RANK', -1)) != -1
     if ddp:
         init_process_group(backend='nccl')
         ddp_rank = int(os.environ['RANK'])
@@ -25,7 +26,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
         ddp_world_size = int(os.environ['WORLD_SIZE'])
         device = f'cuda:{ddp_local_rank}'
         torch.cuda.set_device(device)
-        master_process = ddp_rank == 0 
+        master_process = ddp_rank == 0
         seed_offset = ddp_rank
     else:
         ddp_rank = 0
@@ -38,21 +39,24 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
             device = 'cuda'
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             device = 'mps'
-    
+
         print(f"Using device: {device}")
 
     torch.manual_seed(manual_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(manual_seed)
-    
+
     if master_process:
         os.makedirs(out_dir, exist_ok=True)
 
-    assert total_batch_size % (B*T*ddp_world_size) == 0, "total_batch_size must be divisible by B*T*ddp_world_size"
+    assert total_batch_size % (
+        B*T*ddp_world_size) == 0, "total_batch_size must be divisible by B*T*ddp_world_size"
     grad_accum_steps = total_batch_size // (B*T*ddp_world_size)
 
-    train_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='train')
-    val_loader = DataLoaderLite(B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='val')
+    train_loader = DataLoaderLite(
+        B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='train')
+    val_loader = DataLoaderLite(
+        B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='val')
 
     torch.set_float32_matmul_precision('high')
 
@@ -75,33 +79,35 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
         coeff = 0.5 * (1 + math.cos(math.pi * decay_ratio))
         return min_lr + (max_lr - min_lr) * coeff
 
-    optimizer = raw_model.configure_optimizers(weight_decay=0.1, learning_rate=6e-4, device=device)
+    optimizer = raw_model.configure_optimizers(
+        weight_decay=0.1, learning_rate=6e-4, device=device)
 
     start_step = 0
     if resume_ckpt and os.path.isfile(resume_ckpt):
         if master_process:
             print(f"Loading checkpoint from {resume_ckpt}...")
-            
+
         checkpoint = torch.load(resume_ckpt, map_location=device)
         raw_model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        
+
         start_step = checkpoint['step'] + 1
-        
+
         batches_to_skip = start_step * grad_accum_steps
         if master_process:
-            print(f"Fast-forwarding data loader by {batches_to_skip} micro-batches. This may take a few seconds...")
-            
+            print(
+                f"Fast-forwarding data loader by {batches_to_skip} micro-batches. This may take a few seconds...")
+
         for _ in range(batches_to_skip):
             train_loader.next_batch()
-            
+
         if master_process:
             print(f"Resumed successfully! Continuing from step {start_step}.")
 
     num_steps = len(train_loader.tokens) // (train_loader.B * train_loader.T)
     if master_process and start_step == 0:
         print(f"Training for 1 epoch ({num_steps} steps)")
-    
+
     logging.basicConfig(
         filename='training_metrics.log',
         level=logging.INFO,
@@ -110,9 +116,9 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
     current_val_loss = None
     # Loop modified to start at `start_step` instead of 0
     for step in range(start_step, max_steps):
-        
+
         if step % eval_interval == 0 or step == max_steps - 1:
-            model.eval() 
+            model.eval()
             val_loss_accum = 0.0
             with torch.no_grad():
                 for _ in range(eval_iters):
@@ -121,16 +127,16 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                     with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
                         logits, loss = model(x_val, y_val)
                     val_loss_accum += loss.detach()
-            
+
             val_loss_accum = val_loss_accum / eval_iters
             if ddp:
                 dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-                
+
             if master_process:
                 print(f"step {step} | val loss: {val_loss_accum.item():.4f}")
                 current_val_loss = val_loss_accum.item()
                 checkpoint = {
-                    'model': raw_model.state_dict(),      
+                    'model': raw_model.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'step': step,
                     'val_loss': val_loss_accum.item(),
@@ -170,7 +176,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                         "--ckpt_path", ckpt_path,
                         "--custom_drive_path", "GPT2_Checkpoints"
                     ])
-            model.train() 
+            model.train()
 
         if step > 0 and step % 100 == 0:
             model.eval()
@@ -198,45 +204,47 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                 if master_process:
                     with open(os.path.join(out_dir, "sampled", f'step{step}_sample{i}.txt'), 'w') as f:
                         f.write(decoded)
-        
-        model.train() 
+
+        model.train()
         t0 = time.time()
         optimizer.zero_grad()
         loss_accum = 0.0
-        
+
         for micro_step in range(grad_accum_steps):
             x, y = train_loader.next_batch()
             x, y = x.to(device), y.to(device)
-            
+
             with torch.autocast(device_type=device, dtype=torch.bfloat16 if device != 'cpu' else torch.float32):
                 logits, loss = model(x, y)
-            
+
             loss = loss / grad_accum_steps
             loss_accum += loss.detach()
-            
+
             if ddp:
-                model.require_backward_grad_sync = (micro_step == grad_accum_steps - 1)
+                model.require_backward_grad_sync = (
+                    micro_step == grad_accum_steps - 1)
             loss.backward()
-        
+
         if ddp:
             dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
-        
+
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         lr = get_lr(step)
-        
+
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         optimizer.step()
         if torch.cuda.is_available():
-            torch.cuda.synchronize() 
-        
+            torch.cuda.synchronize()
+
         t1 = time.time()
         dt = (t1 - t0)
-        
-        tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
+
+        tokens_processed = train_loader.B * \
+            train_loader.T * grad_accum_steps * ddp_world_size
         tokens_per_second = tokens_processed / dt
-        
+
         if master_process:
             metrics = {
                 "step": step,
@@ -254,6 +262,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
     if ddp:
         destroy_process_group()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train GPT model")
 
@@ -269,8 +278,9 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=19073)
     parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--eval_iters", type=int, default=20)
-    
-    parser.add_argument("--resume_ckpt", type=str, default=None, help="Path to checkpoint .pt file to resume from")
+
+    parser.add_argument("--resume_ckpt", type=str, default=None,
+                        help="Path to checkpoint .pt file to resume from")
 
     args = parser.parse_args()
 
