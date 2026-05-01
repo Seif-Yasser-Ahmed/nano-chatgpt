@@ -11,6 +11,8 @@ from torch.distributed import init_process_group, destroy_process_group
 import os
 import torch.distributed as dist
 import argparse
+import logging
+import json
 
 def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1024, max_lr=6e-4, min_lr=None, min_lr_factor=0.1, warmup_steps=715, max_steps=19073, eval_interval=100, eval_iters=20, resume_ckpt=None):
     enc = tiktoken.get_encoding('gpt2')
@@ -99,7 +101,13 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
     num_steps = len(train_loader.tokens) // (train_loader.B * train_loader.T)
     if master_process and start_step == 0:
         print(f"Training for 1 epoch ({num_steps} steps)")
-
+    
+    logging.basicConfig(
+        filename='training_metrics.log',
+        level=logging.INFO,
+        format='%(message)s'
+    )
+    current_val_loss = None
     # Loop modified to start at `start_step` instead of 0
     for step in range(start_step, max_steps):
         
@@ -120,6 +128,7 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                 
             if master_process:
                 print(f"step {step} | val loss: {val_loss_accum.item():.4f}")
+                current_val_loss = val_loss_accum.item()
                 checkpoint = {
                     'model': raw_model.state_dict(),      
                     'optimizer': optimizer.state_dict(),
@@ -127,9 +136,40 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                     'val_loss': val_loss_accum.item(),
                 }
                 checkpoint_name = f'ckpt_{step:05d}.pt'
-                torch.save(checkpoint, os.path.join(out_dir, checkpoint_name))
-                print(f"saved checkpoint to {out_dir}/{checkpoint_name}")
-                
+                ckpt_path = os.path.join(out_dir, checkpoint_name)
+                torch.save(checkpoint, ckpt_path)
+                print(f"saved checkpoint to {ckpt_path}")
+                if step > 0 and step % 500 == 0:
+                    import subprocess
+                    import glob
+                    # import os
+
+                    # 1. Find and delete old checkpoints (Locally AND from Drive)
+                    all_ckpts = glob.glob(os.path.join(out_dir, "ckpt_*.pt"))
+                    for old_ckpt in all_ckpts:
+                        if old_ckpt != ckpt_path:
+                            # Send delete command to Google Drive
+                            print(
+                                f"Deleting old checkpoint from Google Drive: {old_ckpt}...")
+                            subprocess.run([
+                                "python", "drive/drive.py",
+                                "--action", "delete",
+                                "--ckpt_path", old_ckpt,
+                                "--custom_drive_path", "GPT2_Checkpoints"
+                            ])
+
+                            # Delete from local disk
+                            os.remove(old_ckpt)
+                            print(f"Deleted local checkpoint: {old_ckpt}")
+
+                    # 2. Upload the brand new checkpoint to Google Drive
+                    print(f"Uploading {checkpoint_name} to Google Drive...")
+                    subprocess.run([
+                        "python", "drive/drive.py",
+                        "--action", "upload",
+                        "--ckpt_path", ckpt_path,
+                        "--custom_drive_path", "GPT2_Checkpoints"
+                    ])
             model.train() 
 
         if step > 0 and step % 100 == 0:
@@ -198,6 +238,17 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
         tokens_per_second = tokens_processed / dt
         
         if master_process:
+            metrics = {
+                "step": step,
+                "loss": round(loss_accum.item(), 4),
+                "lr": round(lr, 6),
+                "norm": round(norm.item(), 4),
+                "time_ms": round(dt * 1000, 2),
+                "tokens_per_second": round(tokens_per_second, 2)
+            }
+            if current_val_loss is not None:
+                metrics["val_loss"] = round(current_val_loss, 4)
+            logging.info(json.dumps(metrics))
             print(f"step {step} | loss: {loss_accum.item():.4f} | lr={lr:.6f} | norm {norm:.4f} | time: {dt*1000:.2f} ms | tok/s: {tokens_per_second:.2f}")
 
     if ddp:
