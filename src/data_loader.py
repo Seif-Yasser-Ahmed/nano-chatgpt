@@ -32,14 +32,15 @@ class DataLoaderLite:
                 self.tokens_y = np.memmap(y_bin_path, dtype=np.int16, mode='r') # int16 for -100
                 self.tokens = self.tokens_x # for length calculations
             else:
+                # Pre-training fallback
                 bin_path = f'data/{split}.bin'
                 if process_rank == 0:
                     print(f"Loading {split} split via memmap from: {bin_path}")
                 self.tokens = np.memmap(bin_path, dtype=np.uint16, mode='r')
                 self.tokens_x = self.tokens
-                self.tokens_y = self.tokens # Pre-training fallback
-                
-            self.tokens = np.memmap(bin_path, dtype=np.uint16, mode='r')
+                self.tokens_y = self.tokens 
+
+        # ---> MAKE SURE THERE IS NO LEFTOVER `self.tokens = np.memmap...` HERE <---
 
         if process_rank == 0:
             print(f"Dataset length in tokens: {len(self.tokens):,}")
