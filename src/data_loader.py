@@ -20,11 +20,24 @@ class DataLoaderLite:
             self.tokens = torch.tensor(tokens, dtype=torch.long)
             
         else:
-            assert split in {'train', 'val'}, f"Split must be 'train' or 'val', got {split}"
-            bin_path = f'data/{split}.bin'
+            assert split in {'train', 'val', 'sft'}, f"Split must be 'train', 'val', or 'sft', got {split}"
             
-            if process_rank == 0:
-                print(f"Loading {split} split via memmap from: {bin_path}")
+            if split == 'sft':
+                # Load the pre-processed SFT binaries
+                x_bin_path = 'data/sft_x.bin'
+                y_bin_path = 'data/sft_y.bin'
+                if process_rank == 0:
+                    print(f"Loading SFT split via memmap...")
+                self.tokens_x = np.memmap(x_bin_path, dtype=np.uint16, mode='r')
+                self.tokens_y = np.memmap(y_bin_path, dtype=np.int16, mode='r') # int16 for -100
+                self.tokens = self.tokens_x # for length calculations
+            else:
+                bin_path = f'data/{split}.bin'
+                if process_rank == 0:
+                    print(f"Loading {split} split via memmap from: {bin_path}")
+                self.tokens = np.memmap(bin_path, dtype=np.uint16, mode='r')
+                self.tokens_x = self.tokens
+                self.tokens_y = self.tokens # Pre-training fallback
                 
             self.tokens = np.memmap(bin_path, dtype=np.uint16, mode='r')
 
@@ -37,18 +50,22 @@ class DataLoaderLite:
     def next_batch(self):
         B, T = self.B, self.T
         
-        buf = self.tokens[self.current_index : self.current_index + B * T + 1]
+        buf_x = self.tokens_x[self.current_index : self.current_index + B * T]
+        buf_y = self.tokens_y[self.current_index : self.current_index + B * T]
         
-        if isinstance(buf, np.ndarray):
-            buf = torch.tensor(buf.astype(np.int64), dtype=torch.long)
-        # If it came from a .txt file, it is already a torch tensor, so we do nothing
-            
-        x = buf[:-1].view(B, T)
-        y = buf[1:].view(B, T)
+        # Convert to tensors
+        x = torch.tensor(buf_x.astype(np.int64), dtype=torch.long).view(B, T)
+        y = torch.tensor(buf_y.astype(np.int64), dtype=torch.long).view(B, T)
+        
+        # Pre-training logic fallback (if y doesn't have our -100 masks)
+        if np.array_equal(buf_x, buf_y):
+             buf = self.tokens[self.current_index : self.current_index + B * T + 1]
+             buf_tensor = torch.tensor(buf.astype(np.int64), dtype=torch.long)
+             x = buf_tensor[:-1].view(B, T)
+             y = buf_tensor[1:].view(B, T)
         
         self.current_index += B * T * self.num_processes
         
-        # Reset if the next batch would go out of bounds
         if self.current_index + B * T * self.num_processes + 1 >= len(self.tokens):
             self.current_index = self.B * self.T * self.process_rank
             
