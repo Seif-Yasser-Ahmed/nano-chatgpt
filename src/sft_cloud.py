@@ -56,8 +56,8 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
     train_loader = DataLoaderLite(
         B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='sft') # Changed to 'sft'
     # For validation, you might need an sft_val split, or you can temporarily comment out the val loop if you just want to overfit the SFT set slightly.
-    # val_loader = DataLoaderLite(
-        # B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='val')
+    val_loader = DataLoaderLite(
+        B=B, T=T, process_rank=ddp_rank, num_processes=ddp_world_size, split='sft')
 
     torch.set_float32_matmul_precision('high')
 
@@ -151,49 +151,66 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                 ckpt_path = os.path.join(out_dir, checkpoint_name)
                 torch.save(checkpoint, ckpt_path)
                 print(f"saved checkpoint to {ckpt_path}")
-                if step > 0 and step % 500 == 0:
-                    import subprocess
-                    import glob
-                    # import os
+                # if step > 0 and step % 500 == 0:
+                #     import subprocess
+                #     import glob
+                #     # import os
 
-                    # 1. Find and delete old checkpoints (Locally AND from Drive)
-                    all_ckpts = glob.glob(os.path.join(out_dir, "ckpt_*.pt"))
-                    for old_ckpt in all_ckpts:
-                        if old_ckpt != ckpt_path:
-                            # Send delete command to Google Drive
-                            print(
-                                f"Deleting old checkpoint from Google Drive: {old_ckpt}...")
-                            subprocess.run([
-                                "python", "src/drive/drive.py",
-                                "--action", "delete",
-                                "--ckpt_path", old_ckpt,
-                                "--custom_drive_path", "GPT2_Checkpoints"
-                            ])
+                #     # 1. Find and delete old checkpoints (Locally AND from Drive)
+                #     all_ckpts = glob.glob(os.path.join(out_dir, "ckpt_*.pt"))
+                #     for old_ckpt in all_ckpts:
+                #         if old_ckpt != ckpt_path:
+                #             # Send delete command to Google Drive
+                #             print(
+                #                 f"Deleting old checkpoint from Google Drive: {old_ckpt}...")
+                #             subprocess.run([
+                #                 "python", "src/drive/drive.py",
+                #                 "--action", "delete",
+                #                 "--ckpt_path", old_ckpt,
+                #                 "--custom_drive_path", "GPT2_Checkpoints"
+                #             ])
 
-                            # Delete from local disk
-                            os.remove(old_ckpt)
-                            print(f"Deleted local checkpoint: {old_ckpt}")
+                #             # Delete from local disk
+                #             os.remove(old_ckpt)
+                #             print(f"Deleted local checkpoint: {old_ckpt}")
 
-                    # 2. Upload the brand new checkpoint to Google Drive
-                    print(f"Uploading {checkpoint_name} to Google Drive...")
-                    subprocess.run([
-                        "python", "src/drive/drive.py",
-                        "--action", "upload",
-                        "--ckpt_path", ckpt_path,
-                        "--custom_drive_path", "GPT2_Checkpoints"
-                    ])
+                #     # 2. Upload the brand new checkpoint to Google Drive
+                #     print(f"Uploading {checkpoint_name} to Google Drive...")
+                #     subprocess.run([
+                #         "python", "src/drive/drive.py",
+                #         "--action", "upload",
+                #         "--ckpt_path", ckpt_path,
+                #         "--custom_drive_path", "GPT2_Checkpoints"
+                #     ])
             model.train()
 
         if step > 0 and step % 100 == 0:
             model.eval()
             num_return_sequences = 4
-            max_length = 32
-            tokens = enc.encode("Hello, Iam a language model,")
-            tokens = torch.tensor(tokens, dtype=torch.long)
+            max_length = 128 # Gave it a bit more room to talk
+            
+            # 1. Manually construct the prompt exactly like prepare_alpaca.py
+            IM_START = 50257
+            IM_END = 50258
+            NEWLINE = 198
+            
+            sys_text = "You are a helpful, logical, and concise AI assistant."
+            user_text = "Hello! Who are you?"
+            
+            # System message
+            prompt_tokens = [IM_START] + enc.encode("system\n") + enc.encode(sys_text) + [IM_END, NEWLINE]
+            # User message
+            prompt_tokens += [IM_START] + enc.encode("user\n") + enc.encode(user_text) + [IM_END, NEWLINE]
+            # Assistant header (wait for model to generate the rest)
+            prompt_tokens += [IM_START] + enc.encode("assistant\n")
+
+            tokens = torch.tensor(prompt_tokens, dtype=torch.long)
             tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
             xgen = tokens.to(device)
+            
             sample_rng = torch.Generator(device=device)
             sample_rng.manual_seed(42 + ddp_rank)
+            
             while xgen.size(1) < max_length:
                 with torch.no_grad():
                     logits, loss = uncompiled_model(xgen)
@@ -203,15 +220,20 @@ def run(manual_seed=1337, out_dir='out_gpt2', total_batch_size=524288, B=64, T=1
                     ix = torch.multinomial(topk_props, 1, generator=sample_rng)
                     xcol = torch.gather(topk_indices, -1, ix)
                     xgen = torch.cat((xgen, xcol), dim=1)
+                    
             for i in range(num_return_sequences):
-                tokens = xgen[i, :max_length].tolist()
-                decoded = enc.decode(tokens)
-                print(f"rank {ddp_rank} | sample {i} | {decoded}")
+                toks = xgen[i, :max_length].tolist()
+                
+                # 2. Filter out our special tokens before decoding so tiktoken doesn't crash/print garbage
+                clean_toks = [t for t in toks if t not in (IM_START, IM_END)]
+                decoded = enc.decode(clean_toks)
+                
+                print(f"rank {ddp_rank} | sample {i} | \n{decoded}\n{'-'*30}")
                 if master_process:
-                    with open(os.path.join(out_dir, "sampled", f'step{step}_sample{i}.txt'), 'w') as f:
+                    with open(os.path.join(out_dir, "sampled", f'step{step}_sample{i}.txt'), 'w', encoding='utf-8') as f:
                         f.write(decoded)
 
-        model.train()
+            model.train()
         t0 = time.time()
         optimizer.zero_grad()
         loss_accum = 0.0

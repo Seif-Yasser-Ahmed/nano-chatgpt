@@ -213,3 +213,4 @@ test_data/
 *.bin
 *.txt
 *.jsonl
+src/drive/
