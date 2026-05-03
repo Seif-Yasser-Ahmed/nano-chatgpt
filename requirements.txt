@@ -5,3 +5,6 @@ datasets
 tqdm
 lm-eval
 accelerate
+optuna-dashboard
+pandas
+optuna
