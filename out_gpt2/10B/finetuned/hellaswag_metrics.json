@@ -1,0 +1,14 @@
+{
+    "gpt_neo_125m_baseline": {
+        "accuracy": 0.28669587731527585,
+        "normalized_accuracy": 0.3040231029675364
+    },
+    "custom_model": {
+        "accuracy": 0.3027285401314479,
+        "normalized_accuracy": 0.33569010157339174
+    },
+    "deltas": {
+        "accuracy_diff": 0.01603266281617205,
+        "normalized_accuracy_diff": 0.03166699860585537
+    }
+}
