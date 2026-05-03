@@ -1,61 +1,76 @@
 import torch
 import tiktoken
-from gpt import GPT # Adjust import path if needed
+from gpt import GPT 
 
-# 1. Setup
+# 1. Setup Constants
+IM_START = 50257
+IM_END = 50258
+NEWLINE = 198
+
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"Loading model to {device}...")
+print(f"Loading KhopeshAi to {device}...")
 
-# Point this to your FINAL checkpoint
-checkpoint_path = "out_gpt2/ckpt_19999.pt" 
+# Point this to your FINAL checkpoint (e.g., step 2000)
+checkpoint_path = "out_gpt2/ckpt_21999.pt" 
 model = GPT.load_custom_checkpoint(checkpoint_path, device=device)
 model.eval()
 
-# If using torch.compile in training, we don't necessarily need it for quick inference, 
-# but you can add it here if you want max speed.
 enc = tiktoken.get_encoding('gpt2')
 
-def generate_response(user_prompt, max_tokens=256, temperature=0.3, top_k=10):
-    # 2. Format as ChatML
-# Add the system prompt to the very beginning
-    system_msg = "You are KhopeshAi, a helpful and intelligent AI assistant."
-    full_prompt = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"    
-    # 3. Encode safely with our custom special tokens
-    prompt_replaced = full_prompt.replace("<|im_start|>", " IM_START ").replace("<|im_end|>", " IM_END ")
-    tokens = enc.encode(prompt_replaced, allowed_special="all")
-    tokens = [50257 if t == enc.encode(" IM_START ")[0] else 50258 if t == enc.encode(" IM_END ")[0] else t for t in tokens]
+def generate_response(user_prompt, max_tokens=256, temperature=0.7, top_k=40):
+    # 2. Construct the ChatML structure directly using token IDs
+    system_msg = "You are a helpful and intelligent AI assistant, named GPT2-155M parameter."
     
-    xgen = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
+    # System Message
+    prompt_tokens = [IM_START] + enc.encode("system\n") + enc.encode(system_msg) + [IM_END, NEWLINE]
     
-    # 4. Generate
+    # User Message
+    prompt_tokens += [IM_START] + enc.encode("user\n") + enc.encode(user_prompt) + [IM_END, NEWLINE]
+    
+    # Assistant Header (Cue the model to start answering)
+    prompt_tokens += [IM_START] + enc.encode("assistant\n")
+    
+    # Convert to tensor
+    xgen = torch.tensor(prompt_tokens, dtype=torch.long, device=device).unsqueeze(0)
+    
+    # 3. Generate
     with torch.no_grad():
-        # Using the generate function from your gpt.py
         generated_idx = model.generate(xgen, max_new_tokens=max_tokens, temperature=temperature, top_k=top_k)
     
-    # 5. Decode safely and stop at <|im_end|>
+    # 4. Decode Safely
     generated_tokens = generated_idx[0].tolist()
     
-    # Slice off the prompt so we only print the new generated tokens
-    new_tokens = generated_tokens[len(tokens):]
+    # Slice off the prompt so we only look at the new generated tokens
+    new_tokens = generated_tokens[len(prompt_tokens):]
     
     chunk = []
     for t in new_tokens:
-        if t == 50258: # <|im_end|> token
-            break      # The model has decided it is done talking! Stop processing.
-        if t == 50257: # <|im_start|> (Shouldn't happen, but just in case)
+        if t == IM_END: # The model has decided it is done talking!
+            break       
+        if t == IM_START: # Shouldn't happen, but just in case
             continue
         chunk.append(t)
         
-    return enc.decode(chunk)
+    return enc.decode(chunk).strip()
 
-print("\n=== KhopeshAi 155M Local Chat (type 'quit' to exit) ===")
+print("\n=== GPT-2 155M Local Chat ===")
+print("Type 'quit' or 'exit' to end the session.")
 print("-" * 55)
 
 while True:
-    user_input = input("\nYou: ")
-    if user_input.lower() in ['quit', 'exit', 'q']:
-        break
+    try:
+        user_input = input("\nYou: ")
+        if user_input.lower() in ['quit', 'exit', 'q']:
+            print("\nShutting down GPT-2. Goodbye!")
+            break
+            
+        if not user_input.strip():
+            continue
+            
+        response = generate_response(user_input)
+        print(f"\nAI Assistant: {response}")
+        print("-" * 55)
         
-    response = generate_response(user_input)
-    print(f"\nAssistant: {response}")
-    print("-" * 55)
+    except KeyboardInterrupt:
+        print("\nForce quitting...")
+        break
