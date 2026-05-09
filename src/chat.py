@@ -66,7 +66,7 @@ def main():
 
     print(f"Loading GPT-2 from '{args.model_path}' to {args.device}...")
 
-    model = GPT.load_custom_checkpoint(args.model_path, device=args.device)
+    model = GPT.load_custom_checkpoint(args.model_path, device=args.device,visualize_attention=False)
     model.eval()
     enc = tiktoken.get_encoding('gpt2')
 
