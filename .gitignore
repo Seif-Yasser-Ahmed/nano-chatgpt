@@ -216,3 +216,4 @@ test_data/
 src/drive/
 src/optuna_trial/*.db
 *.pem
+.gradio/
