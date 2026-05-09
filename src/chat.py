@@ -1,3 +1,4 @@
+import argparse
 import torch
 import tiktoken
 from gpt import GPT
@@ -7,45 +8,30 @@ IM_START = 50257
 IM_END = 50258
 NEWLINE = 198
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"Loading GPT-2 to {device}...")
 
-# Point this to your FINAL checkpoint (e.g., step 2000)
-checkpoint_path = "out_gpt2/ckpt_21999.pt"
-model = GPT.load_custom_checkpoint(checkpoint_path, device=device)
-model.eval()
-
-enc = tiktoken.get_encoding('gpt2')
-
-
-def generate_response(user_prompt, max_tokens=256, temperature=0.7, top_k=40):
-    # 2. Construct the ChatML structure directly using token IDs
-    system_msg = "You are a helpful and intelligent AI assistant, named GPT2-155M parameter."
-
-    # System Message
+def generate_response(model, enc, device, user_prompt, system_msg, max_tokens, temperature, top_k):
     prompt_tokens = [
         IM_START] + enc.encode("system\n") + enc.encode(system_msg) + [IM_END, NEWLINE]
 
-    # User Message
     prompt_tokens += [IM_START] + \
         enc.encode("user\n") + enc.encode(user_prompt) + [IM_END, NEWLINE]
 
-    # Assistant Header (Cue the model to start answering)
     prompt_tokens += [IM_START] + enc.encode("assistant\n")
 
-    # Convert to tensor
     xgen = torch.tensor(prompt_tokens, dtype=torch.long,
                         device=device).unsqueeze(0)
 
     # 3. Generate
     with torch.no_grad():
         generated_idx = model.generate(
-            xgen, max_new_tokens=max_tokens, temperature=temperature, top_k=top_k)
+            xgen,
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            top_k=top_k
+        )
 
-    # 4. Decode Safely
     generated_tokens = generated_idx[0].tolist()
 
-    # Slice off the prompt so we only look at the new generated tokens
     new_tokens = generated_tokens[len(prompt_tokens):]
 
     chunk = []
@@ -59,24 +45,66 @@ def generate_response(user_prompt, max_tokens=256, temperature=0.7, top_k=40):
     return enc.decode(chunk).strip()
 
 
-print("\n=== GPT-2 155M Local Chat ===")
-print("Type 'quit' or 'exit' to end the session.")
-print("-" * 55)
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run a local chat session with a fine-tuned GPT model.")
 
-while True:
-    try:
-        user_input = input("\nYou: ")
-        if user_input.lower() in ['quit', 'exit', 'q']:
-            print("\nShutting down GPT-2. Goodbye!")
+    parser.add_argument("--model_path", type=str, default="out_gpt2/10B/finetuned/ckpt_21999.pt",
+                        help="Path to the model checkpoint.")
+    parser.add_argument("--device", type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
+                        help="Device to load the model on (e.g., 'cuda', 'cpu', 'mps').")
+    parser.add_argument("--max_tokens", type=int, default=256,
+                        help="Maximum number of tokens to generate per response.")
+    parser.add_argument("--temp", type=float, default=0.7,
+                        help="Temperature for generation (higher = more random).")
+    parser.add_argument("--top_k", type=int, default=40,
+                        help="Top-k sampling parameter.")
+    parser.add_argument("--system_prompt", type=str, default="You are a helpful and intelligent AI assistant, named GPT2-155M parameter.",
+                        help="The system prompt to condition the AI's behavior.")
+
+    args = parser.parse_args()
+
+    print(f"Loading GPT-2 from '{args.model_path}' to {args.device}...")
+
+    model = GPT.load_custom_checkpoint(args.model_path, device=args.device)
+    model.eval()
+    enc = tiktoken.get_encoding('gpt2')
+
+    print("\n=== GPT-2 Local Chat ===")
+    print(f"System Prompt: '{args.system_prompt}'")
+    print(
+        f"Params: Temp={args.temp}, TopK={args.top_k}, MaxTokens={args.max_tokens}")
+    print("Type 'quit' or 'exit' to end the session.")
+    print("-" * 55)
+
+    while True:
+        try:
+            user_input = input("\nYou: ")
+            if user_input.lower() in ['quit', 'exit', 'q']:
+                print("\nShutting down GPT-2. Goodbye!")
+                break
+
+            if not user_input.strip():
+                continue
+
+            response = generate_response(
+                model=model,
+                enc=enc,
+                device=args.device,
+                user_prompt=user_input,
+                system_msg=args.system_prompt,
+                max_tokens=args.max_tokens,
+                temperature=args.temp,
+                top_k=args.top_k
+            )
+
+            print(f"\nAI Assistant: {response}")
+            print("-" * 55)
+
+        except KeyboardInterrupt:
+            print("\nForce quitting...")
             break
 
-        if not user_input.strip():
-            continue
 
-        response = generate_response(user_input)
-        print(f"\nAI Assistant: {response}")
-        print("-" * 55)
-
-    except KeyboardInterrupt:
-        print("\nForce quitting...")
-        break
+if __name__ == "__main__":
+    main()
