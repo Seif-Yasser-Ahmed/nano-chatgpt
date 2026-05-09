@@ -271,9 +271,9 @@ The SFT format uses special token IDs:
 
 | Token | ID |
 | --- | ---: |
-| `<|im_start|>` | 50257 |
-| `<|im_end|>` | 50258 |
-| newline | 198 |
+| `<\|im_start\|>` | 50257 |
+| `<\|im_end\|>` | 50258 |
+| `newline` | 198 |
 
 User and system tokens are masked with `-100`, so the loss only trains the model
 on assistant responses and stop tokens.
