@@ -214,3 +214,5 @@ test_data/
 *.txt
 *.jsonl
 src/drive/
+src/optuna_trial/*.db
+*.pem
