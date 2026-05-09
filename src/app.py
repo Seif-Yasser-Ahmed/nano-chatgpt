@@ -28,7 +28,7 @@ def extract_text(content):
 # --- 2. GENERATION & ATTENTION LOGIC ---
 def chat_and_visualize(user_input, prior_history):
     # THE FIX 1: Restored the exact system prompt the model was fine-tuned on!
-    system_msg = "You are a helpful and intelligent AI assistant, named GPT2-155M parameter."
+    system_msg = "You are a helpful and intelligent AI assistant, named GPT2-152M parameter."
 
     prompt_tokens = [
         IM_START] + enc.encode("system\n") + enc.encode(system_msg) + [IM_END, NEWLINE]
@@ -104,12 +104,12 @@ def chat_and_visualize(user_input, prior_history):
 
 # --- 3. GRADIO UI LAYOUT ---
 with gr.Blocks() as demo:
-    gr.Markdown("# GPT2Ai - 155M Custom Architecture")
+    gr.Markdown("# GPT2Ai - 152M Custom Architecture")
 
     with gr.Row():
         with gr.Column(scale=1):
             # THE FIX 3: Explicitly define type="messages" so Gradio knows you are using dictionaries.
-            chatbot = gr.Chatbot(height=500, type="messages")
+            chatbot = gr.Chatbot(height=500)
             msg = gr.Textbox(label="Message GPT2Ai...",
                              placeholder="Type here and press Enter")
             clear = gr.Button("Clear Chat")

@@ -197,7 +197,7 @@ class GPT(nn.Module):
         return idx
 
     @classmethod
-    def load_custom_checkpoint(cls, checkpoint_path, device='cpu',visualize_attention=False):
+    def load_custom_checkpoint(cls, checkpoint_path, device='cpu', visualize_attention=False):
         """
         Loads a custom trained model from a saved .pt checkpoint.
         """
@@ -206,7 +206,7 @@ class GPT(nn.Module):
         
         # Initialize with the exact same config used in run.py
         if visualize_attention:
-            config = GPTConfig(vocab_size=50304,visualize_attention=True)
+            config = GPTConfig(vocab_size=50304, visualize_attention=True)
         else:
             config = GPTConfig(vocab_size=50304)
             # config = checkpoint['config']
@@ -224,6 +224,18 @@ class GPT(nn.Module):
         model.load_state_dict(state_dict)
         model.to(device)
         model.eval() # Hardcode eval mode since this is for generation
+        
+        # --- PRINT PARAMETER COUNTS ---
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        non_trainable_params = total_params - trainable_params
+        
+        print("-" * 30)
+        print("Model Parameters:")
+        print(f"Total:         {total_params:,}")
+        print(f"Trainable:     {trainable_params:,}")
+        print(f"Non-trainable: {non_trainable_params:,}")
+        print("-" * 30)
         
         return model
     
