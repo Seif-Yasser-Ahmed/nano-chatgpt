@@ -12,7 +12,9 @@ fine-tuning.
 The final project model is a custom GPT-2-style assistant model with a 1024-token
 context window, 12 transformer blocks, 12 attention heads, 768 hidden size, and a
 padded vocabulary of 50,304 tokens. The presentation describes it as a
-152M-parameter reproduction of GPT-2.
+152M-parameter reproduction of GPT-2. The parameter count is higher than the
+original GPT-2 124M baseline because this project modified the feed-forward MLP
+to use a LLaMA-style gated architecture.
 
 ## Table of Contents
 
@@ -30,6 +32,7 @@ padded vocabulary of 50,304 tokens. The presentation describes it as a
   - [Training](#training)
     - [Local Smoke Test](#local-smoke-test)
     - [Cloud / Full Pretraining](#cloud--full-pretraining)
+  - [Hyperparameter Optimization](#hyperparameter-optimization)
   - [Fine-Tuning](#fine-tuning)
   - [Evaluation](#evaluation)
     - [Evaluate a Single Checkpoint](#evaluate-a-single-checkpoint)
@@ -42,6 +45,7 @@ padded vocabulary of 50,304 tokens. The presentation describes it as a
     - [HellaSwag Checkpoints](#hellaswag-checkpoints)
     - [Presentation Benchmark Table](#presentation-benchmark-table)
   - [Notes and Limitations](#notes-and-limitations)
+  - [Credits](#credits)
   - [License](#license)
 
 ## Project Goal
@@ -67,7 +71,7 @@ with instruction fine-tuning and an attention-visualization demo.
 - Multi-head causal self-attention.
 - FlashAttention through `torch.nn.functional.scaled_dot_product_attention`.
 - Optional manual attention path for visualization.
-- Transformer MLP blocks, including a modern gated MLP option.
+- Transformer MLP blocks, including a modern LLaMA-style gated MLP option.
 - Weight tying between token embeddings and the language-model head.
 - Custom initialization with residual projection scaling.
 - GPT-2 checkpoint import support from Hugging Face.
@@ -157,6 +161,19 @@ The model is a GPT-2-style decoder-only Transformer:
 | Objective | Next-token prediction |
 | Main checkpoint size | About 152M parameters |
 
+The backbone keeps GPT-2's decoder-only Transformer layout, but the MLP was
+modified from the original GPT-2 feed-forward block to a LLaMA-style gated MLP.
+In `src/mlp.py`, `ModernMLP` uses three projections: `w1` for the gate, `w2` for
+the up projection, and `w3` for the down projection, with a SiLU activation and
+elementwise gating. This is similar in spirit to the gated feed-forward design
+used by LLaMA-family models.
+
+This change improves the expressiveness of the feed-forward block, but it also
+adds parameters. A standard GPT-2 MLP uses two main linear layers, while the
+gated version uses three. That architectural change is the main reason this
+project's model is reported at about 152M parameters instead of the original
+GPT-2 small 124M parameter count.
+
 The presentation explains the model flow as:
 
 1. Text is tokenized into GPT-2 token IDs.
@@ -194,17 +211,20 @@ The full project was completed in these stages:
 11. Added learning-rate warmup and cosine decay.
 12. Added gradient accumulation for large effective batch size.
 13. Added mixed precision, TF32 precision, and CUDA compile support.
-14. Replaced manual attention with FlashAttention for fast training.
-15. Padded the vocabulary from 50,257 to 50,304 for efficient GPU shapes.
-16. Added DDP support for multi-GPU/cloud training.
-17. Prepared FineWeb-Edu data for pretraining.
-18. Ran pretraining on a 10B-token educational dataset sample.
-19. Saved intermediate checkpoints and generated samples during training.
-20. Prepared instruction-following data in ChatML format.
-21. Fine-tuned the pretrained model on SFT data.
-22. Evaluated checkpoints against GPT-2 using HellaSwag.
-23. Added CLI inference, chat inference, and a Gradio demo.
-24. Added attention visualization through the manual attention path.
+14. Modified the GPT-2 MLP into a LLaMA-style gated MLP, increasing the model
+    size to about 152M parameters.
+15. Replaced manual attention with FlashAttention for fast training.
+16. Padded the vocabulary from 50,257 to 50,304 for efficient GPU shapes.
+17. Added DDP support for multi-GPU/cloud training.
+18. Ran an Optuna hyperparameter sweep for training settings.
+19. Prepared FineWeb-Edu data for pretraining.
+20. Ran pretraining on a 10B-token educational dataset sample.
+21. Saved intermediate checkpoints and generated samples during training.
+22. Prepared instruction-following data in ChatML format.
+23. Fine-tuned the pretrained model on SFT data.
+24. Evaluated checkpoints against GPT-2 using HellaSwag.
+25. Added CLI inference, chat inference, and a Gradio demo.
+26. Added attention visualization through the manual attention path.
 
 ## Data Preparation
 
@@ -336,8 +356,43 @@ Example DDP launch:
 torchrun --standalone --nproc_per_node=8 src/train_cloud.py
 ```
 
-The presentation reports training on an H200 GPU with 141 GB HBM3e memory,
-roughly 15 hours of training, at about 150 USD of compute.
+The presentation reports training on Lightning AI's H200 GPU platform. The H200
+environment provided 141 GB of HBM3e memory and high memory bandwidth, which
+made the full training run practical. The run took roughly 15 hours of training,
+at about 150 USD of compute.
+
+## Hyperparameter Optimization
+
+Before the final long training run, the project used Optuna to explore better
+training hyperparameters in `src/optuna_trial/run_optuna.py`.
+
+The sweep optimized validation loss over short trial runs:
+
+| Search item | Range / setting |
+| --- | --- |
+| `max_lr` | `1e-4` to `2e-3`, log scale |
+| `weight_decay` | `0.01` to `0.2` |
+| `warmup_steps` | `20` to `100` |
+| `min_lr_factor` | `0.01` to `0.1` |
+| Steps per trial | `250` |
+| Evaluation batches | `20` |
+| Micro-batch size | `16` |
+| Context length | `1024` |
+| Gradient accumulation | `8` |
+
+The Optuna study used:
+
+- SQLite storage: `optuna_journal.db`
+- Study name: `gpt2_155M_pretrain_sweep`
+- Direction: minimize validation loss
+- Pruner: `MedianPruner`
+- Exported trial log: `src/optuna_trial/optuna_all_trials.csv`
+
+The best Optuna trial was useful for understanding promising training settings,
+but the final model did not use the best Optuna run exactly. Because full
+pretraining at this scale is computationally expensive, the final training setup
+kept a more conservative Karpathy-style schedule instead of restarting a complete
+10B-token run from scratch with the best sweep configuration.
 
 ## Fine-Tuning
 
@@ -495,6 +550,17 @@ Presentation conclusions:
   including both `.` and `src`.
 - The model is educational and experimental. It is not aligned or safety-tested
   like production chat models.
+
+## Credits
+
+This project is heavily based on Andrej Karpathy's educational video
+[Let's reproduce GPT-2 (124M)](https://www.youtube.com/watch?v=l8pRSuU81PU) and
+the ideas in his `build-nanogpt` / `nanoGPT` work. The implementation follows
+his step-by-step GPT-2 reproduction path and adapts it for this course project.
+
+Training was performed using [Lightning AI](https://lightning.ai/)'s H200 GPU platform. Credit goes to
+Lightning AI for providing the cloud GPU environment that made the 10B-token
+pretraining and fine-tuning runs feasible.
 
 ## License
 
