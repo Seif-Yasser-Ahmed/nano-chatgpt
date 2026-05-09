@@ -10,3 +10,4 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.1
     use_checkpoint: bool = False
+    visualize_attention: bool = False

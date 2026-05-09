@@ -197,7 +197,7 @@ class GPT(nn.Module):
         return idx
 
     @classmethod
-    def load_custom_checkpoint(cls, checkpoint_path, device='cpu'):
+    def load_custom_checkpoint(cls, checkpoint_path, device='cpu',visualize_attention=False):
         """
         Loads a custom trained model from a saved .pt checkpoint.
         """
@@ -205,7 +205,11 @@ class GPT(nn.Module):
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         
         # Initialize with the exact same config used in run.py
-        config = GPTConfig(vocab_size=50304)
+        if visualize_attention:
+            config = GPTConfig(vocab_size=50304,visualize_attention=True)
+        else:
+            config = GPTConfig(vocab_size=50304)
+            # config = checkpoint['config']
         model = cls(config)
         
         state_dict = checkpoint['model']

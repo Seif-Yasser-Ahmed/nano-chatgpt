@@ -11,8 +11,11 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.n_embd)
-        # self.attn = CausalSelfAttention(config)
-        self.attn = FlashAttention(config)
+        if config.visualize_attention:
+            # print("Using CausalSelfAttention with attention visualization enabled!")
+            self.attn = CausalSelfAttention(config)
+        else:
+            self.attn = FlashAttention(config)
         self.ln_2 = nn.LayerNorm(config.n_embd)
         # self.mlp = MLP(config)
         if config.use_checkpoint:
